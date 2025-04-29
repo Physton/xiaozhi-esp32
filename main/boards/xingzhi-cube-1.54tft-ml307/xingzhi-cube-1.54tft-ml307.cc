@@ -19,8 +19,8 @@
 
 #define TAG "XINGZHI_CUBE_1_54TFT_ML307"
 
-LV_FONT_DECLARE(font_puhui_20_4);
-LV_FONT_DECLARE(font_awesome_20_4);
+LV_FONT_DECLARE(font_puhui_16_4);
+LV_FONT_DECLARE(font_awesome_16_4);
 
 
 class XINGZHI_CUBE_1_54TFT_ML307 : public Ml307Board {
@@ -33,6 +33,10 @@ private:
     PowerManager* power_manager_;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
+    esp_timer_handle_t volume_up_timer_ = nullptr;
+    esp_timer_handle_t volume_down_timer_ = nullptr;
+    bool is_pressed_volume_up_ = false;
+    bool is_pressed_volume_down_ = false;
 
     void InitializePowerManager() {
         power_manager_ = new PowerManager(GPIO_NUM_38);
@@ -91,6 +95,20 @@ private:
             app.ToggleChatState();
         });
 
+        volume_up_button_.OnPressDown([this]() {
+            is_pressed_volume_up_ = true;
+        });
+
+        volume_up_button_.OnPressUp([this]() {
+            is_pressed_volume_up_ = false;
+             // 停止定时器
+             if (volume_up_timer_) {
+                esp_timer_stop(volume_up_timer_);
+                esp_timer_delete(volume_up_timer_);
+                volume_up_timer_ = nullptr;
+            }
+        });
+
         volume_up_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
             auto codec = GetAudioCodec();
@@ -103,9 +121,40 @@ private:
         });
 
         volume_up_button_.OnLongPress([this]() {
+            // power_save_timer_->WakeUp();
+            // GetAudioCodec()->SetOutputVolume(100);
+            // GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+
+            esp_timer_create_args_t timer_args = {
+                .callback = [](void* arg) {
+                    auto self = static_cast<XINGZHI_CUBE_1_54TFT_ML307*>(arg);
+                    auto codec = self->GetAudioCodec();
+                    auto volume = codec->output_volume() + 1;
+                    if (volume > 100) volume = 100;
+                    codec->SetOutputVolume(volume);
+                    self->GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+                },
+                .arg = this,
+                .dispatch_method = ESP_TIMER_TASK,
+                .name = "volume_up_timer"
+            };
+            ESP_ERROR_CHECK(esp_timer_create(&timer_args, &volume_up_timer_));
+            ESP_ERROR_CHECK(esp_timer_start_periodic(volume_up_timer_, 100000));  // 100ms周期触发
             power_save_timer_->WakeUp();
-            GetAudioCodec()->SetOutputVolume(100);
-            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+        });
+
+        volume_down_button_.OnPressDown([this]() {
+            is_pressed_volume_down_ = true;
+        });
+
+        volume_down_button_.OnPressUp([this]() {
+            is_pressed_volume_down_ = false;
+             // 停止定时器
+             if (volume_down_timer_) {
+                esp_timer_stop(volume_down_timer_);
+                esp_timer_delete(volume_down_timer_);
+                volume_down_timer_ = nullptr;
+            }
         });
 
         volume_down_button_.OnClick([this]() {
@@ -120,9 +169,26 @@ private:
         });
 
         volume_down_button_.OnLongPress([this]() {
+            // power_save_timer_->WakeUp();
+            // GetAudioCodec()->SetOutputVolume(0);
+            // GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+
+            esp_timer_create_args_t timer_args = {
+                .callback = [](void* arg) {
+                    auto self = static_cast<XINGZHI_CUBE_1_54TFT_ML307*>(arg);
+                    auto codec = self->GetAudioCodec();
+                    auto volume = codec->output_volume() - 1;
+                    if (volume < 0) volume = 0;
+                    codec->SetOutputVolume(volume);
+                    self->GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+                },
+                .arg = this,
+                .dispatch_method = ESP_TIMER_TASK,
+                .name = "volume_down_timer"
+            };
+            ESP_ERROR_CHECK(esp_timer_create(&timer_args, &volume_down_timer_));
+            ESP_ERROR_CHECK(esp_timer_start_periodic(volume_down_timer_, 100000));  // 100ms周期触发
             power_save_timer_->WakeUp();
-            GetAudioCodec()->SetOutputVolume(0);
-            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
         });
     }
 
@@ -150,11 +216,11 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_, true));
 
-        display_ = new SpiLcdDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, 
-            DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY, 
+        display_ = new SpiLcdDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
+            DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY,
         {
-            .text_font = &font_puhui_20_4,
-            .icon_font = &font_awesome_20_4,
+            .text_font = &font_puhui_16_4,
+            .icon_font = &font_awesome_16_4,
 #if CONFIG_USE_WECHAT_MESSAGE_STYLE
             .emoji_font = font_emoji_32_init(),
 #else
@@ -180,7 +246,7 @@ public:
         InitializePowerSaveTimer();
         InitializeSpi();
         InitializeButtons();
-        InitializeSt7789Display();  
+        InitializeSt7789Display();
         InitializeIot();
         GetBacklight()->RestoreBrightness();
     }
@@ -194,7 +260,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-    
+
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -217,6 +283,11 @@ public:
             power_save_timer_->WakeUp();
         }
         Ml307Board::SetPowerSaveMode(enabled);
+    }
+
+    virtual Led* GetLed() override {
+        static SingleLed led(BUILTIN_LED_GPIO);
+        return &led;
     }
 };
 
