@@ -61,6 +61,10 @@ Display* Board::GetDisplay() {
     return &display;
 }
 
+Camera* Board::GetCamera() {
+    return nullptr;
+}
+
 Led* Board::GetLed() {
     static NoLed led;
     return &led;
